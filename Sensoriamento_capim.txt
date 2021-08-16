@@ -1,0 +1,190 @@
+#include <Arduino.h>
+#include <VL53L1X.h>
+#include <Ultrasonic.h>
+#include <SoftwareSerial.h>
+#include <DHT_U.h>
+#include <Wire.h>
+
+// variaveis para contagem do tempo (ms)
+unsigned long millis_I = 0;
+unsigned long millis_F = 0;
+unsigned long millis_R = 0;
+unsigned long tempo = 0;
+int ctt = 0;
+int inter = 0;
+//VL53L1X sensor distância infravermelho
+VL53L1X obj_vl53l1x;
+float distV1 = 0;
+
+//Endereço I²C do MPU 6050
+  const int MPU = 0x68;
+  //SCL     ->     A5
+  //SDA     ->     A4
+//Variaveis para armazenar valores do acelerometro e giroscópio
+  float eX, eY, eZ, giX, giY, giZ;
+  float eXT, eYT, giZT;
+  float z = 0, x = 0, y = 0;
+  float acY = 0, acYT = 0, acX = 0, acXT = 0 , acZ = 0, acZT = 0;
+
+//HC-SR04 sensor de distância ultrassônico 40Khz
+#define TP 12
+#define EP 10
+Ultrasonic HC01(TP,EP);
+int distHC = 0;
+
+//Dht11
+#define DHTPIN 5
+#define DHTTYPE    DHT11
+DHT dht(DHTPIN, DHTTYPE);
+//DHT dht(DHTPIN, DHTTYPE);
+uint32_t delayMS;
+float temp, humi;
+
+
+//SensorHall
+//Arduino D2  -> Hall sensor 3rd pin
+#define hallSensorPin 2
+int hallSensorValue = 0;
+int hallSensorLastValue = 0;
+float desloc = 0;
+unsigned long pevtime1, pevtime2, pevtimeR;
+int ctt2 = 0;
+float velocidade;
+const double const1 = 175;
+int intervalo;
+
+//Comunicação com Bluetooth HC06
+#define blueRX 3 //PINO DIGITAL 3 (RX)
+#define blueTX 4 //PINO DIGITAL 4 (TX)
+SoftwareSerial bluetooth(blueRX , blueTX);
+
+void Solic_MPU6050();
+void Contagem_AcDescX();
+void magnet_detect();
+void printBluetooth();
+//----------------------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------------
+//               Setup
+//----------------------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------------
+void setup(){
+  //seria PC
+  Serial.begin(9600);
+  Wire.begin();
+  //Inicializa o MPU-6050
+  Wire.beginTransmission(MPU);
+  Wire.write(0x6B); 
+  Wire.write(0); 
+  Wire.endTransmission(true);
+  delay(5); 
+  // serial bluetooh
+  bluetooth.begin(9600);
+
+  Serial.begin(115200);
+  Wire.begin();
+  Wire.setClock(400000); // use 400 kHz I2C
+
+  obj_vl53l1x.setTimeout(500);
+  if (!obj_vl53l1x.init())
+  {
+    Serial.println("Failed to detect and initialize sensor!");
+    while (1);
+  } 
+  /*Descrição
+  // Use long distance mode and allow up to 50000 us (50 ms) for a measurement.
+  // You can change these settings to adjust the performance of the sensor, but
+  // the minimum timing budget is 20 ms for short distance mode and 33 ms for
+  // medium and long distance modes. See the VL53L1X datasheet for more
+  // information on range and timing limits.*/
+  obj_vl53l1x.setDistanceMode(VL53L1X::Long);
+  obj_vl53l1x.setMeasurementTimingBudget(50000);
+/*Descrição
+  // Start continuous readings at a rate of one measurement every 50 ms (the
+  // inter-measurement period). This period should be at least as long as the
+  // timing budget.*/
+  obj_vl53l1x.startContinuous(50);
+  
+  bluetooth.println("Setup Ok");
+  attachInterrupt(hallSensorLastValue, magnet_detect, RISING);
+  
+}
+
+void loop(){
+  if(inter == 1){
+    humi = dht.readHumidity();
+    temp = dht.readTemperature();
+    bluetooth.print(";Hum;");
+    bluetooth.print(humi);
+    bluetooth.print(";Tmp;");
+    bluetooth.println(temp);
+  }
+  distV1 = obj_vl53l1x.read();
+  distV1 = distV1/10; // converte mm para cm
+  distHC = HC01.read(CM);
+  printBluetooth();
+}
+
+void printBluetooth(){
+  bluetooth.print(";Desc;");
+  bluetooth.print(desloc);
+  bluetooth.print(";Vel;");
+  bluetooth.print(velocidade);
+  bluetooth.print(";La;");
+  bluetooth.print(distV1);
+  bluetooth.print(";HC;");
+  bluetooth.print(distHC);
+  bluetooth.print(";");
+  bluetooth.print(inter);
+  bluetooth.println(";");
+}
+
+void magnet_detect(){//Called whenever a magnet is detected
+  intervalo = 0;
+  velocidade = 0;
+  desloc = desloc + 0.233;
+  pevtime1 = millis();
+  pevtimeR = pevtime1 - pevtime2;
+  float temp = pevtimeR; 
+  temp = temp /1000;
+  velocidade = (0.233/temp);
+  pevtimeR = 0;
+  pevtime2 = millis();
+  inter++;
+}
+
+void Solic_MPU6050(){
+  Wire.beginTransmission(MPU);
+  Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
+  Wire.endTransmission(false);
+  //Solicita os dados do sensor
+  Wire.requestFrom(MPU,14,true);
+  //Armazena o valor dos sensores nas variaveis correspondentes
+  eX=Wire.read()<<8|Wire.read();  //0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)     
+  eY=Wire.read()<<8|Wire.read();  //0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
+  eZ=Wire.read()<<8|Wire.read();  //0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
+  temp=Wire.read()<<8|Wire.read();  //0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
+  giX=Wire.read()<<8|Wire.read();  //0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
+  giY=Wire.read()<<8|Wire.read();  //0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
+  giZ=Wire.read()<<8|Wire.read();  //0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
+  giZT = giZ/131; // converte o dado puro do MPU6050 para um range de 0 a 250º/s
+  acX = eX/1638.4; // converte dado puro, para velocidade em (10 * 2)g
+  acY = eY/1638.4;
+  acX = acX * 0.98;
+  acY = acY * 0.98;
+}
+
+void Contagem_AcDescX(){
+  millis_I = millis();
+  while(millis_R <= 20){
+    ctt++;
+    Solic_MPU6050();
+    x = x + acX;
+    y = y + acY;
+    millis_F = millis();
+    millis_R = millis_F - millis_I;
+  }
+  millis_R = 0;
+  x = x/ctt;
+  y = y/ctt;
+  ctt = 0;
+}
